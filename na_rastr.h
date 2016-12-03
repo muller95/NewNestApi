@@ -2,12 +2,22 @@
 #define _NA_RASTR_H
 
 struct na_rastr {
-	int **rastr;
-	int w, h;
+	int **rastr_matrix;
+	int width, height, npts;
+	struct na_point *outer_contour;
 };
 
-struct na_rastr *na_fig_to_rastr(struct na_figure *fig);
-void na_destr_rastr(struct na_rastr *rastr);
+enum NA_RASTR_TYPE {
+	NA_RASTR_TYPE_SIMPLE,
+	NA_RASTR_TYPE_PART_IN_PART
+};
+
+#include "na_figure.h"
+
+struct na_rastr *na_fig_to_rastr(struct na_figure *fig, enum NA_RASTR_TYPE rastr_type,
+									int resize, int bound);
+
+void na_destroy_rastr(struct na_rastr *rastr);
 
 #endif
 

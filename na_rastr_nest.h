@@ -1,18 +1,38 @@
-#ifndef _NA_MTXNEST_H
-#define _NA_MTXNEST_H
+#ifndef _NA_RASTR_NEST_H
+#define _NA_RASTR_NEST_H
 
-#define NA_CHECKPOS_HEIGHT 0x0
-#define NA_CHECKPOS_SCALE 0x2
-#define NA_POSITION_FAST 0x0
-#define NA_POSITION_FULL 0x1
+#include "na_rastr.h"
+
+enum NA_CHECK_POSITION_MODE {
+	NA_CHECK_POSITION_MODE_HEIGHT,
+	NA_CHECK_POSITION_MODE_SCALE
+};
+
+enum NA_PLACEMENT_MODE {
+	NA_PLACEMENT_MODE_FAST,
+	NA_PLACEMENT_MODE_FULL
+};
 
 #include "na_figure.h"
-#include "na_nest_structs.h"
 #include "na_genetics.h"
 
-int na_rastrnest(struct na_figure *figset, int setsize, 
-				 struct na_individ *indiv, int w, int h, 
-				 struct na_nestattrs *attrs);
+struct na_nest_attrs {
+	int bound, resize, flags;
+	enum NA_CHECK_POSITION_MODE check_position_mode;
+	enum NA_PLACEMENT_MODE placement_mode;
+	enum NA_RASTR_TYPE rastr_type;
+};
+
+struct na_position {
+	struct na_figure *fig;
+	double x, y;
+	int angle;
+};
+
+
+int na_rastr_nest(struct na_figure *figset, int set_size,
+	  	  	  	  struct na_individ *indiv, int width,
+				  int height, struct na_nest_attrs *attrs);
 
 #endif
 

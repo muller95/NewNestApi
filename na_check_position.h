@@ -1,13 +1,14 @@
-#ifndef _NA_CHECKPOS_H
-#define _NA_CHECKPOS_H
+#ifndef _NA_CHECK_POSITION_H
+#define _NA_CHECK_POSITION_H
 
+#include "na_rastr_nest.h"
 #include "na_figure.h"
 
-int checkpos_height(struct na_figure *fig, struct na_position *posits,
-					int npos, int xpos, int ypos, int w, int h, 
-					int *placed);
+int na_check_position_height(struct na_figure *fig, struct na_position *posits,
+							 int npos, int xpos, int ypos, int w, int h,
+							 int *placed);
 int checkpos_scale(struct na_figure *fig, struct na_position *posits,
-				   int npos, int xpos, int ypos, int w, int h, 
+				   int npos, int xpos, int ypos, int width, int height,
 				   int *placed);
 
 #endif

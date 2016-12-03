@@ -1,10 +1,13 @@
 #include <ctype.h>
+#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "na_errno.h"
+#include "na_rastr.h"
 #include "na_routine.h"
+#include "na_transform.h"
 
 #define MAX_FIGS_DEFAULT 	1024
 #define MAX_PRIMS_DEFAULT 	1024
@@ -20,7 +23,33 @@ enum STATE {
 };
 
 static void fig_init(struct na_figure *fig);
-static void move_to_zero(struct na_figure *fig);
+
+void
+na_calc_width_height(struct na_figure *fig)
+{
+	int i, j;
+	double max_x, max_y, min_x, min_y;
+	struct na_primitive *prims;
+	struct na_point *pts;
+
+	prims = fig->prims;
+	max_x = min_x = prims->pts[0].x;
+	max_y = min_y = prims->pts[0].y;
+
+	for (i = 0; i < fig->nprims; i++, prims++) {
+		pts = prims->pts;
+		for (j = 0; j < prims->npts; j++, pts++) {
+			max_x = (pts->x > max_x) ? pts->x : max_x;
+			max_y = (pts->y > max_y) ? pts->y : max_y;
+
+			min_x = (pts->x < min_x) ? pts->x : min_x;
+			min_y = (pts->y < min_y) ? pts->y : min_y;
+		}
+	}
+
+	fig->width = max_x - min_x;
+	fig->height = max_y - min_y;
+}
 
 int 
 na_check_fig(struct na_figure *fig) {
@@ -32,7 +61,8 @@ na_check_fig(struct na_figure *fig) {
 	if (fig == NULL)
 		goto fail_exit;
 
-	if (fig->quant <= 0 || fig->nprims <= 0 || fig->angstep < 0 || fig->prims == NULL)
+	if (fig->quant <= 0 || fig->nprims <= 0 || fig->angstep < 0 || fig->prims == NULL ||
+			fig->width <= DBL_EPSILON || fig->height <= DBL_EPSILON)
 		goto fail_exit;
 
 	for (i = 0; i < fig->nprims; i++, prims++)
@@ -72,9 +102,11 @@ na_copy_fig(struct na_figure *dest, struct na_figure *src)
 	dest->nprims = src->nprims;
 	dest->angstep = src->angstep;
 	dest->mass_center = src->mass_center;
+	dest->width = src->width;
+	dest->height = src->height;
 	
 	for (i = 0; i < 3; i++)
-		memcpy(dest->transform[i], src->transform[i], sizeof(double) * 3);
+		memcpy(dest->matrix[i], src->matrix[i], sizeof(double) * 3);
 	
 
 	if ((dest->prims = malloc(sizeof(struct na_primitive) * src->nprims)) == NULL) {
@@ -154,37 +186,32 @@ fail_exit:
 int 
 na_calc_mass_center(struct na_figure *fig)
 {
-	int i, j;
+	int i;
 	double xsum, ysum;
-	struct na_primitive *prims;
+	struct na_rastr *rastr;
+	struct na_point *pts;
 
 	if (na_check_fig(fig) < 0) {
-		na_errno = NA_ENOMEM;
+		na_errno = NA_EINVAL;
 		goto exit_fail;
 	}
 
-	prims = fig->prims;
+	rastr = na_fig_to_rastr(fig, NA_RASTR_TYPE_SIMPLE, 0, 0);
+
 	xsum = ysum = 0.0;
-	for (i = 0; i < fig->nprims; i++, prims++) {	
-		struct na_point *pts;
-		
-		pts = prims->pts;
-		for (j = 0; j < prims->npts; j++, pts++) {
-			xsum += pts->x;
-			ysum += pts->y;
-		}
+	for (i = 0, pts = rastr->outer_contour; i < rastr->npts; i++, pts++) {
+		xsum += pts->x;
+		ysum += pts->y;
 	}
 
-	fig->mass_center.x = xsum / fig->nprims;
-	fig->mass_center.x = ysum / fig->nprims;
+	fig->mass_center.x = xsum / rastr->npts;
+	fig->mass_center.y = ysum / rastr->npts;
+
+	na_destroy_rastr(rastr);
+	free(rastr);
 
 exit_fail:
 	return -1;
-}
-
-static void
-move_to_zero(struct na_figure *fig)
-{
 }
 
 static void
@@ -194,9 +221,11 @@ fig_init(struct na_figure *fig)
 
 	for (i = 0; i < 3; i++)
 		for (j = 0; j < 3; j++)
-			fig->transform[i][j] = (i == j) ? 1 : 0;
+			fig->matrix[i][j] = (i == j) ? 1 : 0;
 
-	na_calc_gc(fig);
+	na_move_to_zero(fig);
+	na_calc_width_height(fig);
+	na_calc_mass_center(fig);
 }
 
 struct na_figure *
@@ -311,8 +340,7 @@ na_read_figs(FILE *file, int *nfigs)
 			goto fail_free_pts;
 		}
 
-		pts[npts].x = x;
-		pts[npts++].y = y;
+		pts[npts++] = na_point_new(x, y);
 
 		if (npts == max_pts) {
 			void *tmp;
@@ -325,7 +353,7 @@ na_read_figs(FILE *file, int *nfigs)
 		}
 	}
 
-	for (i = 0; i < nfigs; i++)
+	for (i = 0; i < *nfigs; i++)
 		fig_init(&figs[i]);
 
 	return figs;
