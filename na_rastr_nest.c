@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <strings.h>
 
 #include "na_check_position.h"
 #include "na_errno.h"
@@ -15,9 +16,16 @@
 #include "na_routine.h"
 #include "na_transform.h"
 
+struct place_list {
+	int **place;
+	struct place_list *next;
+};
+
 static int place_fig_fast(struct na_figure *fig, struct na_position *posits,
 		   	   	   	   	  int npos, int width, int height, int resize,
 						  int bound, int **place);
+static int init_list_element(struct place_list **elem, int width, int height, int resize);
+static void destory_list_element(struct place_list **elem, int width, int height, int resize);
 
 enum NA_RASTR_TYPE rastr_type;
 enum NA_CHECK_POSITION_MODE check_position_mode;
@@ -116,8 +124,205 @@ place_fig_fast(struct na_figure *fig, struct na_position *posits,
 	return 0;
 }
 
+static int
+init_list_element(struct place_list **elem, int width, int height, int resize) {
+	int i;
+
+	if ((*elem = malloc(sizeof(struct place_list *))) == NULL) {
+		na_errno = NA_ENOMEM;
+		goto fail_exit;
+	}
+
+	if (((*elem)->place = malloc(sizeof(int *) * height / resize)) == NULL) {
+		na_errno = NA_ENOMEM;
+		goto fail_free_elem;
+	}
+
+	for (i = 0; i < height / resize; i++)
+		if (((*elem)->place[i] = calloc(width / resize, sizeof(int))) == NULL) {
+			na_errno = NA_ENOMEM;
+			i--;
+			goto fail_free_place;
+		}
+
+	(*elem)->next = NULL;
+
+	return 0;
+
+fail_free_place:
+	for (; i >= 0; i--)
+		free((*elem)->place[i]);
+	free((*elem)->place);
+
+fail_free_elem:
+	free(*elem);
+
+fail_exit:
+	return -1;
+}
+
+static void
+destory_list_element(struct place_list **elem, int width, int height, int resize)
+{
+	int i;
+
+	for (i = 0; i < height / resize; i++)
+			free((*elem)->place[i]);
+	free((*elem)->place);
+	free(*elem);
+}
+
 int
 na_rastr_nest(struct na_figure *fig_set, int set_size,
+			  struct na_individ *indiv, int width,
+			  int height, struct na_nest_attrs *attrs)
+{
+	int i, j, k, npos = 0, resize, bound, *mask;
+	char name[255];
+	struct na_position *posits;
+	struct place_list *curr, *head;
+	FILE *tmp;
+
+	if (set_size == 0 || width <= 0 || height <= 0 ||
+		indiv == NULL || fig_set == NULL) {
+		na_errno = NA_EINVAL;
+		goto fail_exit;
+	}
+
+	for (i = 0; i < set_size; i++)
+		if (na_check_fig(fig_set + i) < 0) {
+			na_errno = NA_EINVAL;
+			goto fail_exit;
+		}
+
+	if (indiv->genom_size > 0 && indiv->genom == NULL) {
+		na_errno = NA_EINVAL;
+		goto fail_exit;
+	}
+
+	resize = 1;
+	bound = 0;
+	if (attrs != NULL) {
+		resize = (attrs->resize <= 0) ? 1 : attrs->resize;
+		bound = attrs->bound;
+		rastr_type = attrs->rastr_type;
+	}
+
+	if ((posits = malloc(sizeof(struct na_position) * set_size)) == NULL) {
+		na_errno = NA_ENOMEM;
+		goto fail_exit;
+	}
+
+	if ((mask = calloc(set_size, sizeof(int))) == NULL) {
+		na_errno = NA_ENOMEM;
+		goto fail_free_posits;
+	}
+
+	if (init_list_element(&head, width, height, resize) < 0)
+		goto fail_free_mask;
+
+	curr = head;
+
+	if ((posits[0].fig = malloc(sizeof(struct na_figure))) == NULL) {
+		na_errno = NA_ENOMEM;
+		free(posits[0].fig);
+		goto fail_free_positions;
+	}
+
+	if (indiv->genom_size == 0)
+		if ((indiv->genom = malloc(sizeof(int) * set_size)) == NULL) {
+			na_errno = NA_ENOMEM;
+			goto fail_free_positions;
+		}
+
+	for (i = 0; i < set_size; i++) {
+			int fig_num, try_next = 1;
+			struct na_figure *fig;
+
+			if (mask[i] > 0)
+				continue;
+
+			fig_num = i;
+			fig = fig_set + fig_num;
+			na_errno = NA_SUCCESS;
+
+			for (curr = head; curr != NULL; curr = curr->next) {
+				if (place_fig_fast(fig, posits, npos, width, height, resize, bound, curr->place) == 0) {
+					printf("positioned %d x=%lf y=%lf\n", fig_num, posits[npos].x, posits[npos].y);
+					na_translate(fig, posits[npos].x, posits[npos].y);
+					npos++;
+					if (npos < set_size)
+						if ((posits[npos].fig = malloc(sizeof(struct na_figure))) == NULL) {
+							na_errno = NA_ENOMEM;
+							free(posits[npos].fig);
+							goto fail_free_genom;
+						}
+					mask[fig_num] = 1;
+					break;
+				} else if (na_errno == NA_SUCCESS && curr->next == NULL && try_next) {
+					try_next = 0;
+					if (init_list_element(&curr->next, width, height, resize) < 0)
+						goto fail_free_genom;
+				} else if (na_errno != NA_SUCCESS) {
+					i = npos - 1;
+					goto fail_free_genom;
+				}
+			}
+		}
+
+	/*tmp = fopen("/home/vadim/SvgFiles/place", "w+");
+
+	for (i = 0; i < height / resize; i++) {
+		for (j = 0; j < width / resize; j++)
+			fprintf(tmp, "%d", curr->place[i][j]);
+		fprintf(tmp, "\n");
+	}*/
+
+	for (k = 0, curr = head; curr != NULL; curr = curr->next, k++) {
+		bzero(name, 255);
+		sprintf(name, "/home/vadim/SvgFiles/place%d", k);
+		tmp = fopen(name, "w+");
+
+		for (i = 0; i < height / resize; i++) {
+			for (j = 0; j < width / resize; j++)
+				fprintf(tmp, "%d", curr->place[i][j]);
+			fprintf(tmp, "\n");
+		}
+
+		fclose(tmp);
+	}
+
+	indiv->genom_size = npos;
+	indiv->posits = posits;
+
+	return 0;
+
+fail_free_genom:
+	free(indiv->genom);
+
+fail_free_positions:
+	for (; i >= 0; i--) {
+		na_destroy_fig(posits[i].fig);
+		free(posits[i].fig);
+	}
+	free(posits);
+
+fail_free_list:
+	for (curr = head; curr->next != NULL; curr = curr->next)
+		destory_list_element(curr, width, height, resize);
+
+fail_free_mask:
+	free(mask);
+
+fail_free_posits:
+	free(posits);
+
+fail_exit:
+	return 1;
+}
+
+int
+na_rastr_nest1(struct na_figure *fig_set, int set_size,
 			  struct na_individ *indiv, int width,
 			  int height, struct na_nest_attrs *attrs)
 {
